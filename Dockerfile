@@ -33,16 +33,26 @@ FROM python:3.11-slim AS runtime
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH" \
-    PORT=8000
+    PORT=8000 \
+    # kaleido 1.x drives a real Chromium (via choreographer) to render Plotly chart
+    # PNGs for the PDF report. choreographer reads BROWSER_PATH to find the binary.
+    BROWSER_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
-# fonts-noto-core = system-wide Arabic glyphs for PDF export (the app also bundles
-# its own font in assets/fonts/, so this is a belt-and-suspenders fallback).
-# curl is used by the container HEALTHCHECK below.
+# System runtime deps:
+#   fonts-noto-core  → system-wide Arabic glyphs for PDF export (the app also bundles
+#                      its own font in assets/fonts/; this is a belt-and-suspenders fallback).
+#   curl             → used by the container HEALTHCHECK below.
+#   chromium         → headless browser kaleido needs to render chart PNGs into the PDF.
+#   (the remaining libs are Chromium's shared-library dependencies for headless mode.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-core \
     curl \
+    chromium \
+    libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+    libdrm2 libxkbcommon0 libatspi2.0-0 libxcomposite1 libxdamage1 \
+    libxfixes3 libxrandr2 libgbm1 libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Bring over the pre-built virtualenv from the builder (no compiler in this image).
