@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en" dir="auto">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NAMAA Analytics — API Console</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    :root { --indigo:#3D1B6A; --ink:#030213; --muted:#717182; --line:#e5e5ec;
+            --ok:#059669; --err:#d4183d; --bg:#f6f6fa; }
+    *{box-sizing:border-box;}
+    body{font-family:"Segoe UI",Arial,sans-serif;margin:0;color:var(--ink);background:var(--bg);}
+    header{background:var(--indigo);color:#fff;padding:14px 20px;font-weight:700;font-size:1.15rem;
+           display:flex;justify-content:space-between;align-items:center;}
+    header .sid{font-size:.75rem;color:#cbb8e8;font-weight:400;}
+    .wrap{max-width:1150px;margin:0 auto;padding:16px;}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+    @media(max-width:900px){.grid{grid-template-columns:1fr;}}
+    .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px;}
+    .card h3{margin:0 0 4px;font-size:.9rem;color:var(--indigo);display:flex;justify-content:space-between;align-items:center;}
+    .ep{font-family:monospace;font-size:.72rem;color:var(--muted);font-weight:400;}
+    .badge{font-size:.68rem;padding:2px 8px;border-radius:10px;background:#eee;color:#666;}
+    .badge.ok{background:#e7f6ef;color:var(--ok);} .badge.err{background:#fbe9ec;color:var(--err);}
+    .badge.run{background:#fff4e5;color:#b26a00;}
+    input,textarea,select{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;}
+    textarea{resize:vertical;}
+    button{padding:8px 14px;border:0;border-radius:8px;background:var(--indigo);color:#fff;font-size:13px;cursor:pointer;margin-top:8px;}
+    button.sec{background:#eceaf3;color:var(--indigo);}
+    button:disabled{opacity:.5;cursor:default;}
+    .row{display:flex;gap:14px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--muted);margin:6px 0;}
+    .row label{display:flex;gap:5px;align-items:center;cursor:pointer;}
+    pre.out{background:#0f0f1a;color:#c8e1ff;font-family:monospace;font-size:11px;
+            padding:10px;border-radius:8px;max-height:240px;overflow:auto;white-space:pre-wrap;margin-top:8px;}
+    #chart{width:100%;min-height:380px;margin-top:8px;}
+    table{border-collapse:collapse;width:100%;font-size:12px;} th,td{border:1px solid var(--line);padding:5px 8px;text-align:right;} th{background:#f0eef7;}
+    .fu{display:inline-block;margin:4px 6px 0 0;padding:5px 10px;background:#f0eef7;border-radius:14px;font-size:12px;cursor:pointer;color:var(--indigo);}
+    .tabs{display:flex;gap:6px;margin:8px 0;} .tab{padding:5px 11px;border-radius:8px;background:#eceaf3;color:var(--indigo);cursor:pointer;font-size:12px;} .tab.active{background:var(--indigo);color:#fff;}
+    .hidden{display:none;}
+    .small{font-size:11px;color:var(--muted);}
+  </style>
+</head>
+<body>
+  <header>
+    🛠️ NAMAA Analytics — API Console
+    <span class="sid">session_id: <b id="sidLabel"></b> · base: <b id="baseLabel"></b></span>
+  </header>
+
+  <div class="wrap">
+    <!-- ═══ ASK (streaming + non-streaming) ═══ -->
+    <div class="card">
+      <h3><span>1 · Ask</span><span class="ep">POST /ask · /ask/stream</span></h3>
+      <textarea id="q" rows="2" placeholder="أكثر 5 فئات إيرادات في 2025  /  top 5 categories by revenue"></textarea>
+      <div class="row">
+        <label><input type="checkbox" id="viz" checked> chart</label>
+        <label><input type="checkbox" id="reco" checked> recommendations</label>
+        <label><input type="checkbox" id="cache" checked> cache</label>
+      </div>
+      <button onclick="ask(true)">Ask (stream)</button>
+      <button class="sec" onclick="ask(false)">Ask (non-stream)</button>
+      <span id="askBadge" class="badge">idle</span>
+      <span id="tok" class="small"></span>
+    </div>
+
+    <!-- results -->
+    <div class="card hidden" id="summaryCard"><h3>Summary</h3><div id="summary"></div></div>
+
+    <div class="card hidden" id="chartCard">
+      <h3>Chart</h3>
+      <div class="tabs">
+        <div class="tab active" id="tj" onclick="chartTab('json')">chart_json → Plotly.newPlot</div>
+        <div class="tab" id="th" onclick="chartTab('html')">chart_html → iframe</div>
+      </div>
+      <div id="chart"></div>
+      <iframe id="chartHtml" class="hidden" style="width:100%;height:380px;border:1px solid var(--line);border-radius:8px;"></iframe>
+      <div class="small" id="chartNote"></div>
+    </div>
+
+    <div class="card hidden" id="tableCard"><h3>Result table</h3><div id="table"></div></div>
+    <div class="card hidden" id="recoCard"><h3>Recommendations</h3><div id="reco"></div></div>
+    <div class="card hidden" id="fuCard"><h3>Follow-ups</h3><div id="fu"></div></div>
+
+    <!-- ═══ SESSION + EXPORTS + META ═══ -->
+    <div class="grid">
+      <div class="card">
+        <h3><span>2 · Session</span><span class="ep">/clear · /session/save · /session/load</span></h3>
+        <button class="sec" onclick="callJson('/clear','clear')">Clear</button>
+        <button class="sec" onclick="callJson('/session/save','save')">Save</button>
+        <button class="sec" onclick="callJson('/session/load','load')">Load</button>
+        <span id="sessBadge" class="badge">idle</span>
+        <pre class="out" id="sessOut"></pre>
+      </div>
+
+      <div class="card">
+        <h3><span>3 · Exports</span><span class="ep">GET /export/csv · /export/pdf</span></h3>
+        <button class="sec" onclick="download('/export/csv','csv')">Download CSV</button>
+        <button class="sec" onclick="download('/export/pdf','pdf')">Download PDF</button>
+        <span id="expBadge" class="badge">idle</span>
+        <pre class="out" id="expOut"></pre>
+      </div>
+
+      <div class="card">
+        <h3><span>4 · KPIs</span><span class="ep">GET /kpis</span></h3>
+        <button class="sec" onclick="loadKpis()">Load KPIs</button>
+        <span id="kpiBadge" class="badge">idle</span>
+        <div id="kpi" style="margin-top:8px;"></div>
+      </div>
+
+      <div class="card">
+        <h3><span>5 · Health</span><span class="ep">GET /health</span></h3>
+        <button class="sec" onclick="health()">Check</button>
+        <span id="hBadge" class="badge">idle</span>
+        <pre class="out" id="hOut"></pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3><span>6 · Pipeline log</span><span class="ep">from last /ask</span></h3>
+      <pre class="out" id="log"></pre>
+    </div>
+
+    <div class="card">
+      <h3>▶ Run all (smoke test)</h3>
+      <div class="small">Runs health → ask → csv → pdf → kpis → save → load → clear, and reports each.</div>
+      <button onclick="runAll()">Run all endpoints</button>
+      <span id="allBadge" class="badge">idle</span>
+      <pre class="out" id="allOut"></pre>
+    </div>
+  </div>
+
+<script>
+const BASE = location.origin;                       // works when served by FastAPI at /
+const SID = localStorage.getItem("namaa_sid") ||
+            (localStorage.setItem("namaa_sid","web-"+Math.random().toString(36).slice(2)),
+             localStorage.getItem("namaa_sid"));
+document.getElementById("sidLabel").textContent = SID;
+document.getElementById("baseLabel").textContent = BASE;
+
+let lastJson="", lastHtml="";
+const $=id=>document.getElementById(id);
+const show=id=>$(id).classList.remove("hidden");
+const hide=id=>$(id).classList.add("hidden");
+function badge(id,state,txt){ const b=$(id); b.className="badge "+state; b.textContent=txt; }
+function esc(s){return (s||"").replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function mdLite(s){return esc(s).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/\n/g,"<br>");}
+
+function chartTab(w){
+  const j=w==="json"; $("tj").classList.toggle("active",j); $("th").classList.toggle("active",!j);
+  $("chart").classList.toggle("hidden",!j); $("chartHtml").classList.toggle("hidden",j);
+  if(j){ if(lastJson){try{const s=JSON.parse(lastJson);Plotly.newPlot("chart",s.data,s.layout||{},{responsive:true});
+          $("chartNote").textContent="Plotly.newPlot(div, spec.data, spec.layout)";}catch(e){$("chartNote").textContent="parse error: "+e.message;}}}
+  else { if(lastHtml){$("chartHtml").srcdoc="<!DOCTYPE html><meta charset=utf-8><body style=margin:0>"+lastHtml;
+          $("chartNote").textContent="chart_html only renders inside <iframe srcdoc> (scripts run there).";}}
+}
+
+function reset(){
+  ["summaryCard","chartCard","tableCard","recoCard","fuCard"].forEach(hide);
+  $("summary").textContent="";$("table").innerHTML="";$("reco").innerHTML="";$("fu").innerHTML="";$("log").textContent="";
+  lastJson="";lastHtml="";
+}
+function apply(d){
+  if(d.summary||d.chat_text){show("summaryCard");$("summary").textContent=d.summary||d.chat_text;}
+  if(d.result_html){show("tableCard");$("table").innerHTML=d.result_html;}
+  if(d.reco_text){show("recoCard");$("reco").innerHTML=mdLite(d.reco_text);}
+  if(d.chart_json||d.chart_html){lastJson=d.chart_json||"";lastHtml=d.chart_html||"";show("chartCard");chartTab("json");}
+  const fu=d.followup||[]; if(fu.length){show("fuCard");
+    $("fu").innerHTML=fu.map(q=>`<span class="fu" onclick="pick(this.textContent)">${esc(q)}</span>`).join("");}
+  if(d.log)$("log").textContent=d.log;
+  if(d.tokens_used!=null)$("tok").textContent="🔢 "+Number(d.tokens_used).toLocaleString()+" tokens";
+}
+function pick(t){$("q").value=t;ask(true);}
+
+function body(){return{question:$("q").value.trim(),use_viz:$("viz").checked,
+  use_reco:$("reco").checked,use_cache:$("cache").checked,session_id:SID};}
+
+async function ask(stream){
+  const q=$("q").value.trim(); if(!q){badge("askBadge","err","empty");return;}
+  reset(); badge("askBadge","run","running…");
+  try{
+    if(stream){
+      const r=await fetch(BASE+"/ask/stream",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body())});
+      const rd=r.body.getReader(),dec=new TextDecoder();let buf="";
+      while(true){const{value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
+        let i;while((i=buf.indexOf("\n\n"))>=0){const ln=buf.slice(0,i).trim();buf=buf.slice(i+2);
+          if(!ln.startsWith("data:"))continue;const p=ln.slice(5).trim();if(p==="[DONE]")continue;
+          try{apply(JSON.parse(p));}catch{}}}
+      badge("askBadge","ok","200 (streamed)");
+    }else{
+      const r=await fetch(BASE+"/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body())});
+      const d=await r.json(); apply(d); badge("askBadge",r.ok?"ok":"err",r.status+"");
+    }
+  }catch(e){badge("askBadge","err","fail");$("summary").textContent=e.message;show("summaryCard");}
+}
+$("q").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();ask(true);}});
+
+async function callJson(path,which){
+  badge("sessBadge","run",which+"…");
+  try{const r=await fetch(BASE+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({session_id:SID})});
+    const d=await r.json(); $("sessOut").textContent=JSON.stringify(d,null,2); badge("sessBadge",r.ok?"ok":"err",r.status+"");
+  }catch(e){badge("sessBadge","err","fail");$("sessOut").textContent=e.message;}
+}
+
+async function download(path,which){
+  badge("expBadge","run",which+"…");
+  const url=BASE+path+"?session_id="+encodeURIComponent(SID);
+  try{
+    const r=await fetch(url);
+    if(!r.ok){const t=await r.text();$("expOut").textContent=t;badge("expBadge","err",r.status+"");return;}
+    const blob=await r.blob();
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+    a.download=which==="csv"?"namaa_result.csv":"namaa_report.pdf";a.click();
+    $("expOut").textContent=which.toUpperCase()+" downloaded ("+blob.size+" bytes)";badge("expBadge","ok","200");
+  }catch(e){badge("expBadge","err","fail");$("expOut").textContent=e.message;}
+}
+
+async function loadKpis(){
+  badge("kpiBadge","run","…");
+  try{const r=await fetch(BASE+"/kpis");$("kpi").innerHTML=await r.text();badge("kpiBadge",r.ok?"ok":"err",r.status+"");}
+  catch(e){badge("kpiBadge","err","fail");}
+}
+
+async function health(){
+  badge("hBadge","run","…");
+  try{const r=await fetch(BASE+"/health");const d=await r.json();
+    $("hOut").textContent=JSON.stringify(d,null,2);badge("hBadge",d.db?"ok":"err",r.status+(d.db?" db✓":" db✗"));}
+  catch(e){badge("hBadge","err","fail");$("hOut").textContent=e.message;}
+}
+
+// Sequential smoke test of every endpoint.
+async function runAll(){
+  const log=[]; const w=s=>{log.push(s);$("allOut").textContent=log.join("\n");};
+  badge("allBadge","run","running…"); $("allOut").textContent="";
+  const j=async(m,p,b)=>{try{const o={method:m,headers:{"Content-Type":"application/json"}};if(b)o.body=JSON.stringify(b);
+    const r=await fetch(BASE+p,o);return{ok:r.ok,st:r.status,r};}catch(e){return{ok:false,st:"ERR:"+e.message};}};
+  let x;
+  x=await j("GET","/health"); w(`health           → ${x.st} ${x.ok?"✅":"❌"}`);
+  if(!$("q").value.trim())$("q").value="top 5 categories by revenue";
+  x=await j("POST","/ask",body()); const askD=x.ok?await x.r.json():{};
+  w(`ask              → ${x.st} ${x.ok?"✅":"❌"}  chart_json:${(askD.chart_json||"").length}b  reco:${!!askD.reco_text}`);
+  if(x.ok)apply(askD);
+  x=await j("GET","/export/csv?session_id="+SID); w(`export/csv        → ${x.st} ${x.ok?"✅":"❌"}`);
+  x=await j("GET","/export/pdf?session_id="+SID); w(`export/pdf        → ${x.st} ${x.ok?"✅":"❌"}`);
+  x=await j("GET","/kpis"); w(`kpis             → ${x.st} ${x.ok?"✅":"❌"}`);
+  x=await j("POST","/session/save",{session_id:SID}); w(`session/save      → ${x.st} ${x.ok?"✅":"❌"}`);
+  x=await j("POST","/session/load",{session_id:SID}); w(`session/load      → ${x.st} ${x.ok?"✅":"❌"}`);
+  x=await j("POST","/clear",{session_id:SID}); w(`clear            → ${x.st} ${x.ok?"✅":"❌"}`);
+  const fails=log.filter(l=>l.includes("❌")).length;
+  badge("allBadge",fails?"err":"ok",fails?fails+" failed":"all passed");
+  w(`\n${fails?("⚠️ "+fails+" endpoint(s) failed"):"🎉 all endpoints OK"}`);
+}
+</script>
+</body>
+</html>

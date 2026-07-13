@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en" dir="auto">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NAMAA Analytics</title>
+
+  <!-- Plotly.js — required to render chart_json in ANY non-Gradio frontend.
+       Pin a recent version (2.20+) so it decodes Plotly's base64 (bdata) arrays. -->
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+
+  <style>
+    :root { --indigo:#3D1B6A; --ink:#030213; --muted:#717182; --line:#e5e5ec; }
+    * { box-sizing: border-box; }
+    body { font-family:"Segoe UI",Arial,sans-serif; margin:0; color:var(--ink); background:#f6f6fa; }
+    header { background:var(--indigo); color:#fff; padding:14px 20px; font-size:1.2rem; font-weight:700; }
+    .wrap { max-width:1050px; margin:0 auto; padding:18px; }
+    .ask-row { display:flex; gap:8px; margin-bottom:10px; }
+    #q { flex:1; padding:11px 14px; border:1px solid var(--line); border-radius:10px; font-size:15px; }
+    button { padding:10px 18px; border:0; border-radius:10px; background:var(--indigo); color:#fff;
+             font-size:14px; cursor:pointer; }
+    button.sec { background:#eceaf3; color:var(--indigo); }
+    button:disabled { opacity:.5; cursor:default; }
+    .opts { display:flex; gap:16px; flex-wrap:wrap; align-items:center; margin-bottom:14px; font-size:13px; color:var(--muted); }
+    .opts label { display:flex; gap:5px; align-items:center; cursor:pointer; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:14px; }
+    .card h3 { margin:0 0 10px; font-size:.95rem; color:var(--indigo); }
+    #summary { white-space:pre-wrap; line-height:1.6; }
+    #chart { width:100%; min-height:440px; }
+    table { border-collapse:collapse; width:100%; font-size:13px; }
+    th,td { border:1px solid var(--line); padding:7px 10px; text-align:right; }
+    th { background:#f0eef7; }
+    .tabs { display:flex; gap:6px; margin-bottom:10px; }
+    .tab { padding:6px 12px; border-radius:8px; background:#eceaf3; color:var(--indigo); cursor:pointer; font-size:13px; }
+    .tab.active { background:var(--indigo); color:#fff; }
+    .hidden { display:none; }
+    .fu { display:inline-block; margin:4px 6px 0 0; padding:6px 12px; background:#f0eef7;
+          border-radius:16px; font-size:13px; cursor:pointer; color:var(--indigo); }
+    .muted { color:var(--muted); font-size:12px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    iframe { width:100%; height:460px; border:1px solid var(--line); border-radius:8px; }
+    .exp-msg { font-size:12px; color:var(--muted); margin-left:6px; }
+  </style>
+</head>
+<body>
+  <header>📊 NAMAA Analytics Agent</header>
+
+  <div class="wrap">
+    <div class="ask-row">
+      <input id="q" placeholder="اسأل عن بياناتك…  /  Ask about your data…" />
+      <button id="send" onclick="ask()">Ask</button>
+    </div>
+    <div class="opts">
+      <label><input type="checkbox" id="viz" checked> Chart</label>
+      <label><input type="checkbox" id="reco" checked> Recommendations</label>
+      <label><input type="checkbox" id="cache" checked> Cache</label>
+      <span style="flex:1"></span>
+      <button class="sec" onclick="clearSession()">Clear</button>
+      <button class="sec" onclick="showKpis()">KPIs</button>
+      <span id="tok" class="muted"></span>
+    </div>
+
+    <div class="card" id="summaryCard"><h3>Answer</h3><div id="summary" class="muted">Ask a question to begin.</div></div>
+
+    <div class="card hidden" id="chartCard">
+      <div class="tabs">
+        <div class="tab active" id="tab-json" onclick="showTab('json')">chart_json (Plotly.newPlot)</div>
+        <div class="tab" id="tab-html" onclick="showTab('html')">chart_html (iframe)</div>
+      </div>
+      <div id="chart"></div>
+      <iframe id="chartHtml" class="hidden"></iframe>
+      <div class="muted" id="chartNote"></div>
+    </div>
+
+    <div class="card hidden" id="tableCard">
+      <h3>Result Table</h3>
+      <div id="table"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="sec" onclick="exportFile('/export/csv','csv')">⬇ Export table (CSV)</button>
+        <button class="sec" onclick="exportFile('/export/pdf','pdf')">⬇ Export report (PDF)</button>
+        <span id="expMsg" class="exp-msg"></span>
+      </div>
+    </div>
+
+    <div class="card hidden" id="recoCard"><h3>Recommendations</h3><div id="recoBody"></div></div>
+    <div class="card hidden" id="fuCard"><h3>Follow-up questions</h3><div id="fu"></div></div>
+    <div class="card hidden" id="kpiCard"><h3>KPI Snapshot</h3><div id="kpi"></div></div>
+  </div>
+
+<script>
+// Stable per-browser session id so follow-ups / chart-edit / cache work correctly.
+const SID = localStorage.getItem("namaa_sid") ||
+            (localStorage.setItem("namaa_sid", "web-" + Math.random().toString(36).slice(2)),
+             localStorage.getItem("namaa_sid"));
+
+let lastChartJson = "", lastChartHtml = "";
+
+function $(id){ return document.getElementById(id); }
+function show(id){ $(id).classList.remove("hidden"); }
+function hide(id){ $(id).classList.add("hidden"); }
+
+function showTab(which){
+  const j = which === "json";
+  $("tab-json").classList.toggle("active", j);
+  $("tab-html").classList.toggle("active", !j);
+  $("chart").classList.toggle("hidden", !j);
+  $("chartHtml").classList.toggle("hidden", j);
+  if (j) renderJson(); else renderHtml();
+}
+
+// chart_json is a STRING → JSON.parse → Plotly.newPlot(div, data, layout).
+function renderJson(){
+  if (!lastChartJson) return;
+  try {
+    const spec = (typeof lastChartJson === "string") ? JSON.parse(lastChartJson) : lastChartJson;
+    Plotly.newPlot("chart", spec.data, spec.layout || {}, {responsive:true});
+    $("chartNote").textContent = "Rendered via Plotly.newPlot(div, spec.data, spec.layout).";
+  } catch(e){
+    $("chartNote").textContent = "chart_json parse/render error: " + e.message;
+  }
+}
+
+// chart_html shown inside an IFRAME (srcdoc) so its inline <script> actually executes.
+function renderHtml(){
+  if (!lastChartHtml) return;
+  const doc = "<!DOCTYPE html><html><head><meta charset='utf-8'></head><body style='margin:0'>"
+            + lastChartHtml + "</body></html>";
+  $("chartHtml").srcdoc = doc;
+  $("chartNote").textContent = "chart_html works only inside an <iframe srcdoc> (scripts run there).";
+}
+
+function resetCards(){
+  $("summary").textContent = "…"; $("summary").classList.remove("muted");
+  ["chartCard","tableCard","recoCard","fuCard","kpiCard"].forEach(hide);
+  $("table").innerHTML=""; $("recoBody").innerHTML=""; $("fu").innerHTML=""; $("expMsg").textContent="";
+  lastChartJson=""; lastChartHtml="";
+}
+
+function applyFinal(d){
+  if (d.summary || d.chat_text) $("summary").textContent = d.summary || d.chat_text;
+  if (d.result_html){ show("tableCard"); $("table").innerHTML = d.result_html; }
+  // Recommendations. On the final chunk, if recos were requested we always reveal the card
+  // (so you can see whether text arrived) — populated when present, else a clear note.
+  if (d.reco_text){
+    show("recoCard"); $("recoBody").innerHTML = mdLite(d.reco_text);
+  } else if (d.done && $("recoBody").innerHTML === "" && $("reco").checked) {
+    show("recoCard");
+    $("recoBody").innerHTML = "<span class='muted'>No recommendations returned for this query.</span>";
+  }
+  if (d.chart_json || d.chart_html){
+    lastChartJson = d.chart_json || ""; lastChartHtml = d.chart_html || "";
+    show("chartCard"); showTab("json");
+  }
+  const fu = d.followup || [];
+  if (fu.length){
+    show("fuCard");
+    $("fu").innerHTML = fu.map(q => `<span class="fu" onclick="askText(this.textContent)">${esc(q)}</span>`).join("");
+  }
+  if (d.tokens_used != null) $("tok").textContent = "🔢 " + Number(d.tokens_used).toLocaleString() + " tokens";
+}
+
+async function ask(){
+  const q = $("q").value.trim();
+  if (!q) return;
+  $("send").disabled = true;
+  resetCards();
+  const body = JSON.stringify({
+    question:q, use_viz:$("viz").checked, use_reco:$("reco").checked,
+    use_cache:$("cache").checked, session_id:SID
+  });
+  try {
+    // Streaming via SSE — the answer appears token-by-token; final chunk has chart/table/recos.
+    const res = await fetch("/ask/stream", {method:"POST", headers:{"Content-Type":"application/json"}, body});
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true){
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream:true});
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0){
+        const line = buf.slice(0, idx).trim(); buf = buf.slice(idx+2);
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (payload === "[DONE]") continue;
+        let d; try { d = JSON.parse(payload); } catch { continue; }
+        applyFinal(d);
+      }
+    }
+  } catch(e){
+    $("summary").textContent = "Request failed: " + e.message;
+  } finally {
+    $("send").disabled = false;
+  }
+}
+
+function askText(t){ $("q").value = t; ask(); }
+$("q").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+
+async function clearSession(){
+  await fetch("/clear", {method:"POST", headers:{"Content-Type":"application/json"},
+                         body:JSON.stringify({session_id:SID})});
+  resetCards(); $("summary").textContent = "Cleared."; $("summary").classList.add("muted");
+}
+
+async function showKpis(){
+  const r = await fetch("/kpis"); const html = await r.text();
+  show("kpiCard"); $("kpi").innerHTML = html;
+}
+
+// Export the last result (CSV) or the session report (PDF). Downloads via blob so HTTP
+// errors (e.g. no result yet) surface as a message instead of a broken file.
+async function exportFile(path, kind){
+  $("expMsg").textContent = "Preparing " + kind.toUpperCase() + "…";
+  try {
+    const r = await fetch(path + "?session_id=" + encodeURIComponent(SID));
+    if (!r.ok){
+      let msg; try { msg = (await r.json()).error; } catch { msg = "HTTP " + r.status; }
+      $("expMsg").textContent = "⚠️ " + msg;
+      return;
+    }
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = kind === "csv" ? "namaa_result.csv" : "namaa_report.pdf";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
+    $("expMsg").textContent = "✅ " + kind.toUpperCase() + " downloaded.";
+  } catch(e){
+    $("expMsg").textContent = "⚠️ " + e.message;
+  }
+}
+
+// tiny helpers
+function esc(s){ return (s||"").replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function mdLite(s){ return esc(s).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/\n/g,"<br>"); }
+</script>
+</body>
+</html>

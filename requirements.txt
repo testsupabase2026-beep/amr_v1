@@ -1,0 +1,52 @@
+# NAMAA Analytics Agent
+# Pinned to the verified working runtime (env: qwen3-tts) for reproducible deploys.
+#
+# Embeddings run via the Google Gemini API (langchain-google-genai) — the model runs
+# on Google's servers, so the heavy local-inference stack (torch, sentence-transformers,
+# transformers) is NO LONGER a runtime dependency. This trims the Docker image by well
+# over 1 GB. Requires GOOGLE_API_KEY at runtime.
+#
+# To run the LOCAL embedding fallback instead (no GOOGLE_API_KEY), reinstall the local
+# stack:  pip install langchain-huggingface sentence-transformers torch
+# (the FAISS index must then be rebuilt with the local 384-dim model — see
+#  scripts/build_dwh_index.py).
+
+# ── LangChain (1.x — do NOT loosen; 0.x resolves to incompatible APIs) ─────────
+# langchain-core pinned to 1.4.9: langchain-google-genai 4.2.7 requires >=1.4.7,
+# and this is the version verified working in the runtime env.
+langchain==1.2.10
+langchain-core==1.4.9
+langchain-community==0.4.1
+langchain-groq==1.1.2
+langchain-text-splitters==1.1.1
+
+# ── Vector store & embeddings (Gemini API — zero local RAM) ────────────────────
+faiss-cpu==1.13.2
+langchain-google-genai==4.2.7
+
+# ── Database ──────────────────────────────────────────────────────────────────
+sqlalchemy==2.0.47
+psycopg2-binary==2.9.11
+
+# ── Data processing ───────────────────────────────────────────────────────────
+pandas==2.3.3
+numpy==2.3.5
+openpyxl==3.1.5
+tabulate==0.10.0
+
+# ── Charts & export ───────────────────────────────────────────────────────────
+plotly==6.5.2
+kaleido==1.2.0        # PDF PNG export; needs headless Chromium — wrapped in try/except
+reportlab==4.4.10
+
+# ── Arabic text support ───────────────────────────────────────────────────────
+arabic-reshaper==3.0.0
+python-bidi==0.6.7
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv==1.2.1
+
+# ── REST API (api.py — alternative to the Gradio UI) ──────────────────────────
+fastapi==0.128.0
+uvicorn==0.40.0
+python-multipart==0.0.22
