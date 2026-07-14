@@ -452,9 +452,19 @@ def _extract_entity_label(step_text: str, fallback: str) -> str:
     )
     if m2:
         ent = m2.group(1).strip(" -'’")
-        if ent.lower() not in ("the", "all", "total", "brand", "category", "product", "في", "كل"):
+        if ent.lower() not in _ENTITY_STOPWORDS:
             return ent
     return ""
+
+
+# Words that are never a real entity name — connectors, measures, and generic
+# nouns that the loose secondary regex can accidentally capture (e.g. "revenue
+# AND quantity ..." → "and"). Keeps labels like "and (1)"/"and (2)" from appearing.
+_ENTITY_STOPWORDS = {
+    "the", "all", "total", "brand", "category", "product", "seller", "customer",
+    "and", "or", "quantity", "qty", "count", "number", "sold", "amount", "value",
+    "في", "كل", "و", "أو", "الكمية", "كمية", "عدد", "المباعة", "قيمة",
+}
 
 
 def _is_id_col(c: str) -> bool:
@@ -529,9 +539,21 @@ def _combine_merge_on_key(step_results, steps):
             val_label = n1[0]                            # e.g. revenue_kwd
             s0 = steps[0] if len(steps) > 0 else ""
             s1 = steps[1] if len(steps) > 1 else ""
-            # Prefer a named entity (brand/category); else a readable period (Q1 2024 / 2025).
-            lbl1 = _extract_entity_label(s0, "") or _extract_period_label(s0, "")
-            lbl2 = _extract_entity_label(s1, "") or _extract_period_label(s1, "")
+            # Choose the label that actually DISTINGUISHES the two steps:
+            #   - different entities (TIDE vs ARIEL) → use the entity name
+            #   - same entity, different period (PAMPERS 2024 vs 2025) → use the period
+            ent1 = _extract_entity_label(s0, "")
+            ent2 = _extract_entity_label(s1, "")
+            per1 = _extract_period_label(s0, "")
+            per2 = _extract_period_label(s1, "")
+            if ent1 and ent2 and ent1 != ent2:
+                lbl1, lbl2 = ent1, ent2                   # entities differ
+            elif per1 and per2 and per1 != per2:
+                lbl1, lbl2 = per1, per2                   # same entity, periods differ
+            else:
+                # fall back to entity, then period, then a generic distinct pair
+                lbl1 = ent1 or per1
+                lbl2 = ent2 or per2
             # Last-resort guard: never let the two bars share a name (they'd merge into one).
             if not lbl1 or not lbl2 or lbl1 == lbl2:
                 lbl1 = lbl1 or "المجموعة 1"

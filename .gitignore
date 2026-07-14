@@ -1,0 +1,28 @@
+# Secrets — NEVER commit
+.env
+credentials.txt
+
+# Python caches / build
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+
+# Runtime-generated artifacts
+temp_chart_*.png
+_chart_*.png
+namaa_report_*.pdf
+metrics.jsonl
+query_log.jsonl
+session.json
+sessions/
+last_result.csv
+last_result.xlsx
+last_chart.html
+
+# Editor / OS
+.venv/
+.vscode/
+*.rar
