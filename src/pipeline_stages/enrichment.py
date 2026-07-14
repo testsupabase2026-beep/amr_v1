@@ -321,6 +321,30 @@ async def run(state: PipelineState) -> AsyncIterator[dict]:
             "title": state.question, "x_title": "", "y_title": "الإيرادات (دينار كويتي / KWD)",
         }
 
+    # ── Distribution / pie ────────────────────────────────────────
+    # "share / contribution / proportion of a whole" → pie. Built deterministically so
+    # the title stays the user's own question (the LLM path produced garbled mixed-lang
+    # titles like "… of 分布"). Fires when the classifier says distribution, or the user
+    # explicitly asks for a pie/donut, and the shape is 1 categorical + 1 measure.
+    _wants_pie = _intent_type == "distribution" or any(
+        w in (state.question or "").lower()
+        for w in ("pie", "donut", "دائري", "دائرة", "قطاعي", "نسبة", "حصة", "مساهمة", "توزيع", "proportion", "share", "contribution")
+    )
+    _pie_ok = (
+        not _is_time_series
+        and not _scalar_period_compare
+        and len(_numeric_cols) == 1
+        and len(_categorical_cols) >= 1
+        and 2 <= len(result) <= 15          # pies are unreadable past ~12 slices
+    )
+    if _wants_pie and _pie_ok:
+        state.chart_spec = {
+            "kind": "pie",
+            "names": _categorical_cols[0],
+            "values": _numeric_cols[0],
+            "title": state.question,
+        }
+
     # ── Async chart helper (closure over locals) ─────────────────
     async def _gen_chart_async():
         chart_html_local = ""

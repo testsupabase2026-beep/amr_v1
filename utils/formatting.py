@@ -164,6 +164,13 @@ def _is_money_col(col: str) -> bool:
     cl = str(col).lower()
     if _is_pct_col(cl):          # a growth/% column is NEVER money, even if named *_kwd_*
         return False
+    # Quantity / count columns are NEVER money, even if they contain a money keyword
+    # like "total" (e.g. total_quantity, total_orders) — this stopped a KWD suffix
+    # from being wrongly stamped on order-quantity pies/bars.
+    if any(k in cl for k in ("quantity", "qty", "count", "_orders", "num_", "units", "عدد", "كمية")):
+        # ...unless it ALSO explicitly names a currency (e.g. avg_value_kwd)
+        if not any(k in cl for k in ("_kwd", "_jd", "revenue", "price", "amount", "sales", "spend")):
+            return False
     return any(k in cl for k in
                ("revenue", "price", "fee", "total", "sales", "_kwd", "_jd", "amount", "spend", "discount", "tax", "value"))
 
@@ -219,8 +226,13 @@ def prettify_fig(fig, result=None):
 
             if ttype == "pie":
                 # Round percent + abbreviate value; drop ugly micro-percent precision.
+                # Only suffix KWD when the values are actually monetary — a pie of order
+                # quantities / counts must NOT show "KWD" (that was a hard-coded bug).
+                _pie_unit = " KWD" if money_cols else ""
                 tr.texttemplate = "%{percent:.1%}"
-                tr.hovertemplate = "%{label}<br>%{value:,.0f} KWD (%{percent:.1%})<extra></extra>"
+                tr.hovertemplate = (
+                    "%{label}<br>%{value:,.0f}" + _pie_unit + " (%{percent:.1%})<extra></extra>"
+                )
                 continue
 
             # value/unit formatting for this trace
