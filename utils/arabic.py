@@ -4,12 +4,36 @@ arabic.py
 Utilities for Arabic text reshaping and BiDi display.
 Also handles optional reportlab Arabic font registration.
 """
+import re
 import arabic_reshaper
 from bidi.algorithm import get_display
 
+# Any character in the Arabic Unicode blocks (base, supplement, extended,
+# presentation forms A/B). Used to decide whether a string needs RTL treatment.
+_ARABIC_RE = re.compile(r"[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]")
+
+
+def has_arabic(text) -> bool:
+    """True if the string contains at least one Arabic character."""
+    return bool(_ARABIC_RE.search(str(text)))
+
 # ── reportlab font setup (optional) ───────────────────────────
+# Arabic-capable font (set below if reportlab + a TTF are available).
 _AR_FONT  = "Helvetica"
 _AR_FONT_B = "Helvetica-Bold"
+# Latin font: reportlab built-in, always available, full Latin coverage.
+# The bundled Noto Naskh Arabic font has NO Latin glyphs, so English text MUST
+# be drawn with this — otherwise English words silently vanish from the PDF.
+_LAT_FONT  = "Helvetica"
+_LAT_FONT_B = "Helvetica-Bold"
+
+
+def font_for(text, bold: bool = False) -> str:
+    """Pick the correct reportlab font for a piece of text: the Arabic font if it
+    contains Arabic, else the Latin font. Prevents missing-glyph drops."""
+    if has_arabic(text):
+        return _AR_FONT_B if bold else _AR_FONT
+    return _LAT_FONT_B if bold else _LAT_FONT
 
 try:
     import os
@@ -111,15 +135,36 @@ def fix_arabic(text: str) -> str:
 
 
 def _ar_str(text: str) -> str:
-    """Reshape + apply BiDi algorithm (use for single-line reportlab or console output)."""
-    return get_display(arabic_reshaper.reshape(_sanitize_text(text)))
+    """
+    Prepare a single line for reportlab / console output.
+
+    Language-aware: only text that actually CONTAINS Arabic is reshaped and
+    BiDi-reversed. Pure English / Latin / numeric strings are returned unchanged
+    — running them through the BiDi algorithm reverses word order and mangles or
+    drops them (this was why English queries came out blank/garbled in the PDF).
+    """
+    text = _sanitize_text(text)
+    if not has_arabic(text):
+        return text
+    return get_display(arabic_reshaper.reshape(text))
+
+
+def rl_alignment(text, default_rtl_ok: bool = True):
+    """
+    reportlab alignment code for a piece of text:
+      2 = TA_RIGHT (Arabic / RTL), 0 = TA_LEFT (English / LTR).
+    Use so English paragraphs left-align and Arabic paragraphs right-align.
+    """
+    return 2 if has_arabic(text) else 0
 
 
 def _ar_pdf(text: str) -> str:
     """
-    Reshape Arabic for multi-line reportlab Paragraphs.
-    Uses reshape-only (NO BiDi reversal) so reportlab wrapping stays correct.
-    Right-align the paragraph style separately.
+    Reshape Arabic for multi-line reportlab Paragraphs (reshape-only, NO BiDi
+    reversal, so reportlab wrapping stays correct). Non-Arabic text is untouched.
     """
-    return arabic_reshaper.reshape(_sanitize_text(text))
+    text = _sanitize_text(text)
+    if not has_arabic(text):
+        return text
+    return arabic_reshaper.reshape(text)
 

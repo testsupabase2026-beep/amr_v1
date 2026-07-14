@@ -25,7 +25,10 @@ from src.prompts import (
     NL_SUMMARY_PROMPT,
 )
 from src import session as _sess
-from utils.arabic import _ar_str, _AR_FONT, _AR_FONT_B
+from utils.arabic import (
+    _ar_str, _AR_FONT, _AR_FONT_B, _LAT_FONT, _LAT_FONT_B,
+    has_arabic, rl_alignment, font_for,
+)
 from utils.formatting import _format_number_cols
 
 # ── reportlab availability ─────────────────────────────────────
@@ -177,13 +180,16 @@ def _render_kpi_block(kpi_data: dict, body_style) -> list:
     if not kpi_data:
         return []
 
+    # KPI labels are column names (English) and values are numeric → use the
+    # Latin font so nothing drops. `fl`/`flb` name the Latin regular/bold fonts.
+    fl, flb = _LAT_FONT, _LAT_FONT_B
     if len(kpi_data) == 1:
         col, val = next(iter(kpi_data.items()))
         formatted = _format_kpi_value(val, col)
         para = _RL_P(
             f"<para alignment='center' spaceb='4' spacea='4'>"
-            f"<font size='28' color='#1a1a2e'><b>{formatted}</b></font><br/>"
-            f"<font size='10' color='#717182'>{col.upper()}</font>"
+            f"<font name='{flb}' size='28' color='#1a1a2e'><b>{_esc(formatted)}</b></font><br/>"
+            f"<font name='{fl}' size='10' color='#717182'>{_esc(col.upper())}</font>"
             f"</para>",
             body_style,
         )
@@ -193,9 +199,9 @@ def _render_kpi_block(kpi_data: dict, body_style) -> list:
     rows = []
     for col, val in kpi_data.items():
         rows.append([
-            _RL_P(f"<font size='9' color='#717182'>{col.upper()}</font>", body_style),
+            _RL_P(f"<font name='{fl}' size='9' color='#717182'>{_esc(col.upper())}</font>", body_style),
             _RL_P(
-                f"<font size='14' color='#1a1a2e'><b>{_format_kpi_value(val, col)}</b></font>",
+                f"<font name='{flb}' size='14' color='#1a1a2e'><b>{_esc(_format_kpi_value(val, col))}</b></font>",
                 body_style,
             ),
         ])
@@ -215,11 +221,23 @@ def _render_kpi_block(kpi_data: dict, body_style) -> list:
     return [_RL_Sp(1, 0.3 * _RL_CM), tbl, _RL_Sp(1, 0.4 * _RL_CM)]
 
 
+def _esc(text: str) -> str:
+    """Escape XML special chars so reportlab's mini-markup never breaks."""
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
 def _wrap_arabic_lines(text: str, max_chars: int = 95) -> list:
     """
-    Manually split Arabic text into short lines (≤ max_chars).
-    BiDi will be applied AFTER splitting so reportlab never re-wraps
-    a BiDi-reversed string (which would corrupt the visual order).
+    Manually split text into short lines (≤ max_chars).
+    For Arabic, BiDi is applied AFTER splitting so reportlab never re-wraps a
+    BiDi-reversed string (which would corrupt the visual order). English lines
+    are returned as-is (reportlab wraps LTR text fine, but pre-splitting keeps
+    both languages on the same code path).
     """
     result = []
     for natural in text.split("\n"):
@@ -243,16 +261,80 @@ def _wrap_arabic_lines(text: str, max_chars: int = 95) -> list:
     return result
 
 
+# Characters the Arabic font renders (Arabic letters, digits, spaces, comma/period).
+# Everything else (= + ( ) / * % - and Latin letters) has NO glyph in the Arabic
+# font and must be drawn with the Latin font, or it silently disappears.
+_AR_RENDERABLE = re.compile(r"[؀-ۿﭐ-﻿0-9\s.,،؛؟]")
+
+
+def _mixed_markup(rendered: str, latin_font: str) -> str:
+    """
+    Given an already-reshaped/BiDi string, wrap every run of characters the Arabic
+    font can't draw (Latin letters, % = + ( ) / * - …) in a <font name="Latin">
+    tag so they render instead of vanishing. Arabic runs are left in the base font.
+    Input is escaped here (do NOT pre-escape).
+    """
+    out = []
+    buf = []
+    buf_latin = None  # None until first char decides the run type
+
+    def flush():
+        if not buf:
+            return
+        seg = _esc("".join(buf))
+        if buf_latin:
+            out.append(f'<font name="{latin_font}">{seg}</font>')
+        else:
+            out.append(seg)
+
+    for ch in rendered:
+        is_latin = not bool(_AR_RENDERABLE.match(ch))
+        if buf_latin is None:
+            buf_latin = is_latin
+        if is_latin != buf_latin:
+            flush()
+            buf = []
+            buf_latin = is_latin
+        buf.append(ch)
+    flush()
+    return "".join(out)
+
+
+def _para(text: str, base_style, *, bold: bool = False):
+    """
+    Build a language-aware reportlab Paragraph:
+      - Arabic  → reshape+BiDi, right-align, Arabic font, with ASCII/symbol runs
+                  drawn in the Latin font (so % = ( ) - / * and Latin words show).
+      - English → untouched, left-align, Latin font.
+    """
+    align = rl_alignment(text)
+    is_ar = has_arabic(text)
+    st = _RL_PS(
+        base_style.name + ("_r" if align == 2 else "_l") + ("_b" if bold else ""),
+        parent=base_style,
+        alignment=align,
+        fontName=font_for(text, bold=bold),  # Arabic vs Latin base font
+    )
+    rendered = _ar_str(text)
+    try:
+        if is_ar:
+            latin = _LAT_FONT_B if bold else _LAT_FONT
+            markup = _mixed_markup(rendered, latin)
+            return _RL_P(markup, st)
+        return _RL_P(_esc(rendered), st)
+    except Exception:
+        return _RL_P(_esc(str(text)), st)
+
+
 def _reco_paragraphs(text: str, num_style, body_style) -> list:
     """
-    Render a recommendation string as reportlab elements.
-    Strategy:
-    - Strip **bold** markers (can't mix inline bold with manual BiDi wrap safely)
-    - Split into numbered items
-    - Each item → bold number heading + pre-wrapped body lines with _ar_str() per line
+    Render a recommendation string as reportlab elements — bilingual-safe.
+    - Strip **bold** markers (inline bold can't mix with manual BiDi wrap).
+    - Split into numbered items; each item = bold "N." heading + wrapped body.
+    - Every line is rendered via _para() so Arabic and English each get the
+      correct shaping + alignment.
     """
     paras = []
-    # Remove **bold** markers — keep plain text for reliable BiDi rendering
     plain = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
 
     items = re.split(r"(?m)(?=^\d+[\.\)])", plain.strip())
@@ -265,24 +347,23 @@ def _reco_paragraphs(text: str, num_style, body_style) -> list:
         if m:
             num = m.group(1)
             body = m.group(2).strip()
-            # Bold number heading (Latin digit — no BiDi needed)
-            paras.append(_RL_P(f"<b>{num}</b>", num_style))
-            # Body: pre-wrap then apply _ar_str() per short line
+            # Number heading follows the body's language for alignment.
+            head_align = rl_alignment(body)
+            nst = _RL_PS(
+                num_style.name + ("_r" if head_align == 2 else "_l"),
+                parent=num_style, alignment=head_align,
+                fontName=font_for(body, bold=True),
+            )
+            paras.append(_RL_P(f"<b>{_esc(num)}</b>", nst))
             for wrapped in _wrap_arabic_lines(body):
                 if wrapped:
-                    try:
-                        paras.append(_RL_P(_ar_str(wrapped), body_style))
-                    except Exception:
-                        paras.append(_RL_P(wrapped, body_style))
+                    paras.append(_para(wrapped, body_style))
         else:
             for wrapped in _wrap_arabic_lines(item):
                 if wrapped:
-                    try:
-                        paras.append(_RL_P(_ar_str(wrapped), body_style))
-                    except Exception:
-                        paras.append(_RL_P(wrapped, body_style))
+                    paras.append(_para(wrapped, body_style))
 
-        paras.append(_RL_Sp(1, 0.3 * _RL_CM))
+        paras.append(_RL_Sp(1, 0.25 * _RL_CM))
     return paras
 
 
@@ -306,137 +387,110 @@ def _generate_pdf_report() -> str:
         )
 
         # ── Styles ────────────────────────────────────────────
+        INDIGO = _RL_COLORS.HexColor("#3D1B6A")
+        ACCENT = _RL_COLORS.HexColor("#06B6D4")
+        INK = _RL_COLORS.HexColor("#1a1a2e")
+        MUTED = _RL_COLORS.HexColor("#717182")
+        CARD_BG = _RL_COLORS.HexColor("#f7f6fb")
+
+        # Alignment is set per-paragraph by _para() / _reco_paragraphs().
+        # Title/subtitle are English → Latin font (the Arabic font has no Latin glyphs).
         title_s = _RL_PS(
-            "DTitle", fontSize=16, fontName=_AR_FONT_B, spaceAfter=6, alignment=1
+            "DTitle", fontSize=20, fontName=_LAT_FONT_B, alignment=1,
+            textColor=_RL_COLORS.white, leading=24,
         )
         sub_s = _RL_PS(
-            "DSub",
-            fontSize=9,
-            fontName=_AR_FONT,
-            spaceAfter=10,
-            alignment=1,
-            textColor=_RL_COLORS.grey,
+            "DSub", fontSize=9.5, fontName=_LAT_FONT, alignment=1,
+            textColor=_RL_COLORS.HexColor("#d9ccec"), leading=13,
         )
         heading_s = _RL_PS(
-            "DHead",
-            fontSize=12,
-            fontName=_AR_FONT_B,
-            spaceBefore=10,
-            spaceAfter=6,
-            textColor=_RL_COLORS.HexColor("#1a1a2e"),
-            alignment=2,
-        )  # right-align for Arabic
-        qsub_s = _RL_PS(
-            "DQSub",
-            fontSize=9,
-            fontName=_AR_FONT_B,
-            spaceAfter=4,
-            spaceBefore=6,
-            leftIndent=4,
-            rightIndent=4,
-            textColor=_RL_COLORS.HexColor("#2563eb"),
-            alignment=2,
+            "DHead", fontSize=13, fontName=_LAT_FONT_B, spaceBefore=6, spaceAfter=8,
+            textColor=INDIGO, alignment=0,
+        )
+        qtitle_s = _RL_PS(
+            "DQTitle", fontSize=11, fontName=_AR_FONT_B, spaceAfter=0,
+            textColor=_RL_COLORS.white, leading=15,
+        )
+        section_s = _RL_PS(
+            "DSect", fontSize=9, fontName=_LAT_FONT_B, spaceBefore=6, spaceAfter=3,
+            textColor=ACCENT, alignment=0,
         )
         body_s = _RL_PS(
-            "DBody",
-            fontSize=9.5,
-            fontName=_AR_FONT,
-            spaceAfter=5,
-            leading=20,  # leading=20 prevents overlap
-            alignment=2,  # right-align for Arabic
-            rightIndent=6,
-            leftIndent=6,
+            "DBody", fontSize=10, fontName=_AR_FONT, spaceAfter=4, leading=17,
+            alignment=0, textColor=INK,
         )
-        # Numbered heading: bold, slightly larger, right-aligned
         num_s = _RL_PS(
-            "DNum",
-            fontSize=10,
-            fontName=_AR_FONT_B,
-            spaceBefore=8,
-            spaceAfter=3,
-            leading=20,
-            alignment=2,
-            textColor=_RL_COLORS.HexColor("#1a1a2e"),
-            rightIndent=6,
-            leftIndent=6,
+            "DNum", fontSize=10, fontName=_AR_FONT_B, spaceBefore=6, spaceAfter=2,
+            leading=16, alignment=0, textColor=INDIGO,
         )
 
         avail_w = page_w - 4 * _RL_CM
         elems = []
 
         # ── Header ────────────────────────────────────────────
-        elems.append(
-            _RL_P(_ar_str("NAMAA Analytics Agent \u2014 Session Report"), title_s)
+        header_tbl = _RL_T(
+            [[_RL_P(_ar_str("NAMAA Analytics Agent \u2014 Session Report"), title_s)],
+             [_RL_P(datetime.datetime.now().strftime("Generated %Y-%m-%d  %H:%M"), sub_s)]],
+            colWidths=[avail_w],
         )
-        elems.append(_RL_P(datetime.datetime.now().strftime("%Y-%m-%d  %H:%M"), sub_s))
-        elems.append(
-            _RL_HR(
-                width="100%",
-                thickness=1,
-                color=_RL_COLORS.HexColor("#1a1a2e"),
-                spaceAfter=10,
-            )
-        )
+        header_tbl.setStyle(_RL_TS([
+            ("BACKGROUND", (0, 0), (-1, -1), INDIGO),
+            ("LINEBELOW", (0, -1), (-1, -1), 3, ACCENT),
+            ("TOPPADDING", (0, 0), (-1, 0), 14),
+            ("BOTTOMPADDING", (0, -1), (-1, -1), 12),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        elems.append(header_tbl)
+        elems.append(_RL_Sp(1, 0.5 * _RL_CM))
 
         # ── Query History ─────────────────────────────────────
         if _sess._query_history:
-            elems.append(_RL_P(_ar_str("Query History"), heading_s))
-            hist_data = [
-                [_ar_str("#"), _ar_str("Time"), _ar_str("Question"), _ar_str("Shape")]
-            ]
+            elems.append(_RL_P("Query History", heading_s))
+            hcell = _RL_PS("hcell", fontName=_LAT_FONT, fontSize=8.5, leading=11,
+                           textColor=INK)
+            hcell_c = _RL_PS("hcell_c", parent=hcell, alignment=1,
+                             fontName=_LAT_FONT_B)
+            hist_data = [[
+                _RL_P("<b>#</b>", hcell_c), _RL_P("<b>Time</b>", hcell_c),
+                _RL_P("<b>Question</b>", hcell_c), _RL_P("<b>Shape</b>", hcell_c),
+            ]]
             for i, item in enumerate(_sess._query_history[-10:], 1):
-                hist_data.append(
-                    [
-                        str(i),
-                        item["timestamp"],
-                        _ar_str(item["question"]),
-                        item["shape"],
-                    ]
-                )
+                q = item["question"]
+                qcell = _RL_PS("q%d" % i, parent=hcell, alignment=rl_alignment(q),
+                               fontName=font_for(q))
+                hist_data.append([
+                    _RL_P(str(i), hcell_c),
+                    _RL_P(_esc(item["timestamp"]), hcell_c),
+                    _RL_P(_esc(_ar_str(q)), qcell),
+                    _RL_P(_esc(item["shape"]), hcell_c),
+                ])
             ht = _RL_T(
                 hist_data,
-                colWidths=[0.6 * _RL_CM, 1.8 * _RL_CM, None, 2.8 * _RL_CM],
-                repeatRows=1,
-                hAlign="RIGHT",
+                colWidths=[0.8 * _RL_CM, 2.2 * _RL_CM, None, 2.4 * _RL_CM],
+                repeatRows=1, hAlign="CENTER",
             )
-            ht.setStyle(
-                _RL_TS(
-                    [
-                        ("BACKGROUND", (0, 0), (-1, 0), _RL_COLORS.HexColor("#1a1a2e")),
-                        ("TEXTCOLOR", (0, 0), (-1, 0), _RL_COLORS.white),
-                        ("FONTNAME", (0, 0), (-1, -1), _AR_FONT),
-                        ("FONTNAME", (0, 0), (-1, 0), _AR_FONT_B),
-                        ("FONTSIZE", (0, 0), (-1, -1), 8),
-                        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                        ("ALIGN", (2, 1), (2, -1), "RIGHT"),
-                        ("GRID", (0, 0), (-1, -1), 0.3, _RL_COLORS.grey),
-                        (
-                            "ROWBACKGROUNDS",
-                            (0, 1),
-                            (-1, -1),
-                            [_RL_COLORS.white, _RL_COLORS.HexColor("#eef2ff")],
-                        ),
-                        ("TOPPADDING", (0, 0), (-1, -1), 4),
-                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                    ]
-                )
-            )
+            ht.setStyle(_RL_TS([
+                ("BACKGROUND", (0, 0), (-1, 0), INDIGO),
+                ("TEXTCOLOR", (0, 0), (-1, 0), _RL_COLORS.white),
+                ("FONTNAME", (0, 0), (-1, 0), _AR_FONT_B),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LINEBELOW", (0, 0), (-1, 0), 1, ACCENT),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [_RL_COLORS.white, CARD_BG]),
+                ("LINEBELOW", (0, 1), (-1, -1), 0.25, _RL_COLORS.HexColor("#e5e5ec")),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ]))
             elems.append(ht)
             elems.append(_RL_Sp(1, 0.6 * _RL_CM))
 
-        # ── Charts + Recommendations (paired) ─────────────────
+        # ── Charts + Recommendations (one card per query) ─────
         if _sess._accumulated_recommendations:
-            elems.append(
-                _RL_HR(
-                    width="100%",
-                    thickness=0.8,
-                    color=_RL_COLORS.HexColor("#1a1a2e"),
-                    spaceAfter=6,
-                )
-            )
-            elems.append(
-                _RL_P(_ar_str("Analysis Results & Business Recommendations"), heading_s)
-            )
+            elems.append(_RL_P("Analysis Results & Business Recommendations", heading_s))
+            elems.append(_RL_Sp(1, 0.2 * _RL_CM))
 
             for idx, rec in enumerate(_sess._accumulated_recommendations, 1):
                 if not isinstance(rec, dict):
@@ -447,48 +501,49 @@ def _generate_pdf_report() -> str:
                 chart_path = rec.get("chart_path")
                 kpi_data = rec.get("kpi_data")
 
-                # ── Query heading ──────────────────────────────
-                elems.append(
-                    _RL_HR(
-                        width="90%",
-                        thickness=0.4,
-                        color=_RL_COLORS.HexColor("#2563eb"),
-                        spaceAfter=4,
-                    )
+                # Query title bar — indigo pill spanning the content width
+                qts = _RL_PS("qt%d" % idx, parent=qtitle_s,
+                             alignment=rl_alignment(question_text),
+                             fontName=font_for(question_text, bold=True))
+                title_bar = _RL_T(
+                    [[_RL_P(_esc(_ar_str(f"{idx}.  {question_text}")), qts)]],
+                    colWidths=[avail_w],
                 )
-                try:
-                    elems.append(_RL_P(_ar_str(f"▸ {question_text}"), qsub_s))
-                except Exception:
-                    elems.append(_RL_P(f"Query {idx}", qsub_s))
+                title_bar.setStyle(_RL_TS([
+                    ("BACKGROUND", (0, 0), (-1, -1), INDIGO),
+                    ("TOPPADDING", (0, 0), (-1, -1), 7),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ]))
+                elems.append(title_bar)
+                elems.append(_RL_Sp(1, 0.3 * _RL_CM))
 
-                # ── Chart image (if available) ─────────────────
+                # Chart image (if available), else KPI block for single-row results
                 if chart_path and os.path.exists(chart_path):
                     try:
                         img = _RL_Image(
                             chart_path, width=avail_w, height=avail_w * 460 / 900
                         )
+                        img.hAlign = "CENTER"
                         elems.append(img)
                         elems.append(_RL_Sp(1, 0.3 * _RL_CM))
                     except Exception:
                         pass
-                elif chart_path:
-                    elems.append(
-                        _RL_P(
-                            _ar_str(
-                                "Chart not available (install kaleido: pip install kaleido)"
-                            ),
-                            body_s,
-                        )
-                    )
                 elif kpi_data:
                     # Single-row result with no chart → styled KPI block in lieu of an image
                     elems.extend(_render_kpi_block(kpi_data, body_s))
 
-                # ── Recommendation text ────────────────────────
+                # Recommendation text, under a cyan section label
                 if reco_text:
+                    elems.append(_RL_P("Insights &amp; Recommendations", section_s))
                     elems.extend(_reco_paragraphs(reco_text, num_s, body_s))
 
-                elems.append(_RL_Sp(1, 0.4 * _RL_CM))
+                # Card divider between queries
+                elems.append(_RL_Sp(1, 0.2 * _RL_CM))
+                elems.append(_RL_HR(width="100%", thickness=0.5,
+                                    color=_RL_COLORS.HexColor("#e5e5ec"), spaceAfter=2))
+                elems.append(_RL_Sp(1, 0.35 * _RL_CM))
 
         doc.build(elems)
 
