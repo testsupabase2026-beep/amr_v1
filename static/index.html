@@ -14,7 +14,21 @@
     * { box-sizing: border-box; }
     body { font-family:"Segoe UI",Arial,sans-serif; margin:0; color:var(--ink); background:#f6f6fa; }
     header { background:var(--indigo); color:#fff; padding:14px 20px; font-size:1.2rem; font-weight:700; }
-    .wrap { max-width:1050px; margin:0 auto; padding:18px; }
+    /* Page shell: Examples sidebar (left) + main content (right) */
+    .shell { max-width:1360px; margin:0 auto; padding:18px; display:flex; gap:18px; align-items:flex-start; }
+    .sidebar { flex:0 0 260px; position:sticky; top:18px; }
+    .sidebar .card { padding:14px; }
+    .sidebar h3 { margin:0 0 4px; font-size:.95rem; color:var(--indigo); }
+    .ex-hint { font-size:11px; color:var(--muted); margin-bottom:10px; }
+    .ex { display:block; width:100%; text-align:start; margin:0 0 8px; padding:9px 11px;
+          background:#f0eef7; color:var(--indigo); border:1px solid var(--line); border-radius:9px;
+          font-size:12.5px; line-height:1.45; cursor:pointer; }
+    .ex:hover { background:var(--indigo); color:#fff; border-color:var(--indigo); }
+    .wrap { flex:1; min-width:0; max-width:1050px; padding:0; }
+    @media (max-width:860px) {
+      .shell { flex-direction:column; }
+      .sidebar { position:static; flex-basis:auto; width:100%; }
+    }
     .ask-row { display:flex; gap:8px; margin-bottom:10px; }
     #q { flex:1; padding:11px 14px; border:1px solid var(--line); border-radius:10px; font-size:15px; }
     button { padding:10px 18px; border:0; border-radius:10px; background:var(--indigo); color:#fff;
@@ -44,6 +58,15 @@
 </head>
 <body>
   <header>📊 NAMAA Analytics Agent</header>
+
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="card">
+        <h3>💡 Examples</h3>
+        <div class="ex-hint">Click any question to run it.</div>
+        <div id="examples"></div>
+      </div>
+    </aside>
 
   <div class="wrap">
     <div class="ask-row">
@@ -85,7 +108,8 @@
     <div class="card hidden" id="recoCard"><h3>Recommendations</h3><div id="recoBody"></div></div>
     <div class="card hidden" id="fuCard"><h3>Follow-up questions</h3><div id="fu"></div></div>
     <div class="card hidden" id="kpiCard"><h3>KPI Snapshot</h3><div id="kpi"></div></div>
-  </div>
+  </div><!-- /.wrap -->
+  </div><!-- /.shell -->
 
 <script>
 // Stable per-browser session id so follow-ups / chart-edit / cache work correctly.
@@ -98,6 +122,28 @@ let lastChartJson = "", lastChartHtml = "";
 function $(id){ return document.getElementById(id); }
 function show(id){ $(id).classList.remove("hidden"); }
 function hide(id){ $(id).classList.add("hidden"); }
+
+// ── Example queries (left sidebar) ────────────────────────────
+// Click fills the question box and runs it. Bilingual (Arabic + English).
+const EXAMPLES = [
+  "أكثر 10 منتجات من حيث الكميات المباعة",
+  "monthly sales in 2024 only",
+  "percentage distribution of each category in sales",
+  "اعلى 10 براندات من حيث الكميات المباعة",
+  "غير لون الخلفية للون البرتقالى",
+  "top 10 brands in sold quantities",
+  "قارن مبيعات يناير وفبراير ومارس 2025 لأعلى 5 فئات فى المبيعات",
+  "Revenue and order count per brand for top 5",
+];
+function renderExamples(){
+  const box = $("examples");
+  if (!box) return;
+  box.innerHTML = EXAMPLES.map(q => {
+    const rtl = /[؀-ۿ]/.test(q);          // right-align Arabic chips
+    return `<button class="ex" dir="${rtl?'rtl':'ltr'}" onclick="askText(this.dataset.q)" `
+         + `data-q="${esc(q)}">${esc(q)}</button>`;
+  }).join("");
+}
 
 function showTab(which){
   const j = which === "json";
@@ -197,6 +243,7 @@ async function ask(){
 
 function askText(t){ $("q").value = t; ask(); }
 $("q").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+renderExamples();   // build the Examples sidebar on load
 
 async function clearSession(){
   await fetch("/clear", {method:"POST", headers:{"Content-Type":"application/json"},
